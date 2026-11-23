@@ -1,9 +1,5 @@
 # S0 工程架构
 
-> 当前知识架构（2026-10-17，D-045）：自研Agent + 自研RAG + Cloudflare D1。KnowledgeRetriever为平台无关自研接口，D1KeywordRetriever为待实现正式后端路线，优先关键词/标题/分类/分段；Dify全部废弃。现有来源/文章/版本/审核/outbox是权威，公开检索复验当前权限、许可、版本及生命周期。向量资源另批。下方各节按原日期保留历史。
-
-日期：2026-10-12。已确认保留 Next.js + TypeScript + Cloudflare Workers 的基线，使用 OpenNext 适配。S0 没有接入真实地图、模型、RAG、短信或学校系统。
-
 ## 页面与状态
 
 六个路由 `/map`、`/radar`、`/knowledge`、`/schedule`、`/favorites`、`/account` 共用 `(campus)/layout.tsx`。Shell 保留导航展开和全局 AI 面板状态；页面内跳转不会创建另一个 Agent。手机底部五入口，收藏入口位于“我的”。AI 抽屉支持半屏/全屏、拖动和键盘操作；退出时恢复打开按钮的焦点。

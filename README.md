@@ -1,12 +1,16 @@
-# 广外通 CampusOS
+<h1 align="center">广外通 CampusOS</h1>
 
-**一站式 AI 校园生活服务平台** —— 把分散在官网、公众号、通知公告和教务系统里的校园信息，收进一个能问、能查、能导航、能办事的入口。
+<p align="center">
+  <img src="docs/assets/logo.png" alt="广外通 CampusOS 标志" width="200">
+</p>
+
+<p align="center"><strong>一站式 AI 校园生活服务平台</strong> —— 把分散在官网、公众号、通知公告和教务系统里的校园信息，收进一个能问、能查、能导航、能办事的入口。</p>
 
 ![CampusOS 功能结构图](docs/assets/campusos-functional-structure.png)
 
 ---
 
-## 一、选题背景与需求分析
+## 一、背景与需求分析
 
 ### 1.1 真实痛点
 
@@ -144,15 +148,11 @@
 | **多 Skill 集成与组合调用** | 8 个已注册 Skill，覆盖检索、事件、地点、路线、地图控制；单轮可组合执行并受 Schema / 超时 / 副作用校验 | `src/lib/server/maps/skills.ts`、`retrieval/skills.ts`、`external-search/skill.ts` |
 | **知识库 / RAG 接入** | 自研 `KnowledgeRetriever` 契约 + `D1KeywordRetriever` 实现；FTS5 关键词 + 分类 + 分段召回；片段绑定文档 ID / 快照版本 / 内容修订 / 证据偏移；引用可回溯到原文 | `src/lib/server/retrieval/retriever.ts`、`indexer.ts`、`migrations/0049_shared_article_retrieval.sql` |
 
-**架构的诚实说明**：四个域是"逻辑子智能体"——各自拥有独立的工具集、权限和运行预算，由总控统一编排，共享同一模型运行时，而不是四个独立部署的微服务。这样既保留了多智能体"分工 + 编排"的核心收益，又避免了校园场景下不必要的运维与成本开销。需要横向扩展时，任一域都可以独立拆出。
-
 ---
 
 ## 六、预期应用效果
 
 ### 6.1 项目内部验收数据
-
-以下数据来自项目内部验收环境，公开仓库不包含对应的 D1 数据和部署实例，因此不能直接在本地复现；保留它们是为了说明系统的实际运行规模，而不是把仓库当作已上线服务。
 
 | 指标 | 实测值 | 来源 |
 | --- | --- | --- |
@@ -265,6 +265,30 @@ docs/                    架构、部署说明与 README 配图
 
 - [架构演进与边界](docs/ARCHITECTURE.md)
 - [部署与回滚](docs/DEPLOYMENT.md)
+- [CC BY-NC 4.0 许可证](LICENSE)
+- [第三方组件与数据许可](THIRD_PARTY_NOTICES.md)
+
+---
+
+## 十二、许可证
+
+本项目源码与原创文档采用 **Creative Commons Attribution-NonCommercial 4.0 International（CC BY-NC 4.0）**。
+
+允许在非商业目的下复制、分发、修改和演绎，但必须：
+
+- 保留版权声明与许可声明
+- 注明是否修改
+- 提供许可证链接
+- 不得用于商业目的
+
+由于包含“非商业”限制，本项目属于 **source-available**，不是 OSI 定义下的开源软件。CC 许可证不授予专利或商标权利；“广外通 / CampusOS”名称与学校标识也不随本许可授予官方背书权利。
+
+部分内容不适用 CC BY-NC 4.0：
+
+- `public/maps/` 中的校园地图数据包含 OpenStreetMap 衍生数据，遵循 [ODbL](https://www.openstreetmap.org/copyright)，使用或再分发时需保留 OpenStreetMap 署名。
+- 第三方组件、字体、模型与人格设计按其原始许可执行，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 及各资源目录内的许可文件。
+- `services/wechat-collector` 是与 WeChat MP Tools 配合的本地互操作工具，不包含上游桌面应用。来源：https://github.com/x554960766/wechat-mp-tools
+- “广外通 / CampusOS”名称与学校标识不随代码许可授予商标或官方背书权利。
 
 ---
 
