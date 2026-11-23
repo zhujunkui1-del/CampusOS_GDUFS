@@ -1,0 +1,11 @@
+node_modules
+.next
+.open-next
+.wrangler
+playwright-report
+test-results
+package-lock.json
+cloudflare-env.d.ts
+next-env.d.ts
+public/vendor
+public/maps/*.geojson

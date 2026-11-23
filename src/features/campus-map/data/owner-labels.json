@@ -1,0 +1,304 @@
+{
+  "source": "校园地图标注",
+  "reviewedAt": "2026-10-13",
+  "confirmations": "师苑Q1—Q4由负责人逐项回复确认；其余名称依据负责人指定校区图；本轮友苑、球场及分栋顺序依据负责人逐项批注",
+  "labels": {
+    "osm-relation-19299170": {
+      "name": "教学楼D栋",
+      "category": "teaching",
+      "zone": "teaching",
+      "minZoom": 16,
+      "nameSource": "OpenStreetMap 与负责人校区图名称一致"
+    },
+    "osm-relation-19299171": {
+      "name": "教学楼B栋",
+      "category": "teaching",
+      "zone": "teaching",
+      "minZoom": 16,
+      "nameSource": "OpenStreetMap 与负责人校区图名称一致"
+    },
+    "osm-relation-4105730": {
+      "name": "教学楼（E/F/G栋）",
+      "category": "teaching",
+      "zone": "teaching",
+      "minZoom": 17,
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；保留整体轮廓，分栋标签按负责人朝北顺序绑定原始外环节点",
+      "maxZoom": 15.8
+    },
+    "osm-relation-4105911": {
+      "name": "实验楼（A/B/C/D/E栋）",
+      "category": "building",
+      "zone": "teaching",
+      "minZoom": 16,
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；保留整体轮廓，分栋标签按负责人朝北顺序绑定原始外环节点",
+      "maxZoom": 15.8
+    },
+    "osm-relation-4105910": {
+      "name": "学术交流中心",
+      "category": "building",
+      "zone": "teaching",
+      "minZoom": 15,
+      "nameSource": "OpenStreetMap 与负责人校区图名称一致"
+    },
+    "osm-way-307250997": {
+      "name": "大会堂（教工活动中心）",
+      "minZoom": 15
+    },
+    "osm-way-307250998": {
+      "name": "图书馆"
+    },
+    "osm-way-307437432": {
+      "name": "校行政办公楼"
+    },
+    "osm-way-312536950": {
+      "name": "南苑9栋"
+    },
+    "osm-way-312536951": {
+      "name": "南苑10栋"
+    },
+    "osm-way-312536952": {
+      "name": "南苑11栋"
+    },
+    "osm-way-312536953": {
+      "name": "南苑13栋",
+      "category": "dormitory",
+      "zone": "living"
+    },
+    "osm-way-312536954": {
+      "name": "南苑12栋"
+    },
+    "osm-way-312536955": {
+      "name": "南苑7栋"
+    },
+    "osm-way-312536956": {
+      "name": "南苑8栋"
+    },
+    "osm-way-313039010": {
+      "name": "学生活动中心",
+      "category": "building",
+      "zone": "living"
+    },
+    "osm-way-313039037": {
+      "name": "师苑1栋",
+      "category": "dormitory",
+      "zone": "living",
+      "nameSource": "负责人逐栋确认：Q1师苑1栋、Q2师苑3栋、Q3师苑4栋、Q4师苑2栋"
+    },
+    "osm-way-313039033": {
+      "name": "师苑3栋",
+      "category": "dormitory",
+      "zone": "living",
+      "nameSource": "负责人逐栋确认：Q1师苑1栋、Q2师苑3栋、Q3师苑4栋、Q4师苑2栋"
+    },
+    "osm-way-313039056": {
+      "name": "师苑4栋",
+      "category": "dormitory",
+      "zone": "living",
+      "nameSource": "负责人逐栋确认：Q1师苑1栋、Q2师苑3栋、Q3师苑4栋、Q4师苑2栋"
+    },
+    "osm-way-313039038": {
+      "name": "师苑2栋",
+      "category": "dormitory",
+      "zone": "living",
+      "nameSource": "负责人逐栋确认：Q1师苑1栋、Q2师苑3栋、Q3师苑4栋、Q4师苑2栋"
+    },
+    "osm-way-313039031": {
+      "name": "友苑",
+      "category": "dormitory",
+      "zone": "living",
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图"
+    },
+    "osm-way-313039048": {
+      "name": "文采园（一饭）",
+      "category": "canteen",
+      "zone": "living"
+    },
+    "osm-way-313039057": {
+      "name": "风采园（三饭）",
+      "category": "canteen",
+      "zone": "living"
+    },
+    "osm-way-313039061": {
+      "name": "博雅园（二饭）",
+      "category": "canteen",
+      "zone": "living"
+    },
+    "osm-way-313039046": {
+      "name": "门诊部"
+    },
+    "osm-way-651642991": {
+      "name": "B8学术报告厅",
+      "aliases": ["报告厅"],
+      "nameSource": "负责人2026-10-14浏览器批注确认",
+      "nameReviewedAt": "2026-10-14",
+      "verification": "owner_confirmed"
+    },
+    "osm-node-12959101438": {
+      "name": "又康超市",
+      "category": "service",
+      "zone": "living",
+      "aliases": ["又康"],
+      "nameSource": "负责人2026-10-14浏览器批注确认",
+      "nameReviewedAt": "2026-10-14",
+      "verification": "owner_confirmed"
+    },
+    "osm-way-1389756837": {
+      "name": "体育场（真草场）",
+      "minZoom": 15
+    },
+    "osm-way-1389756844": {
+      "name": "体育馆（羽毛球场）",
+      "minZoom": 15
+    },
+    "osm-way-1389859437": {
+      "name": "假草场",
+      "minZoom": 15
+    },
+    "osm-way-1389859440": {
+      "name": "羽毛球场",
+      "category": "badminton",
+      "zone": "teaching",
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图"
+    },
+    "osm-way-1389859441": {
+      "name": "羽毛球场",
+      "category": "badminton",
+      "zone": "teaching",
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图"
+    },
+    "osm-way-1389859416": {
+      "name": "排球场",
+      "category": "volleyball",
+      "zone": "teaching",
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图"
+    },
+    "osm-way-1389859418": {
+      "name": "排球场",
+      "category": "volleyball",
+      "zone": "teaching",
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图"
+    },
+    "osm-way-1389859420": {
+      "name": "排球场",
+      "category": "volleyball",
+      "zone": "teaching",
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图"
+    },
+    "osm-way-1389859423": {
+      "name": "排球场",
+      "category": "volleyball",
+      "zone": "teaching",
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图"
+    },
+    "osm-node-3125704419": {
+      "name": "教学楼E栋",
+      "category": "teaching",
+      "zone": "teaching",
+      "minZoom": 17,
+      "parentId": "osm-relation-4105730",
+      "aliases": ["教学楼E", "E栋"],
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；源轮廓标签锚点，非已核验建筑入口"
+    },
+    "osm-node-3125704391": {
+      "name": "教学楼F栋",
+      "category": "teaching",
+      "zone": "teaching",
+      "minZoom": 17,
+      "parentId": "osm-relation-4105730",
+      "aliases": ["教学楼F", "F栋"],
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；源轮廓标签锚点，非已核验建筑入口"
+    },
+    "osm-node-3125704356": {
+      "name": "教学楼G栋",
+      "category": "teaching",
+      "zone": "teaching",
+      "minZoom": 17,
+      "parentId": "osm-relation-4105730",
+      "aliases": ["教学楼G", "G栋"],
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；源轮廓标签锚点，非已核验建筑入口"
+    },
+    "osm-node-3125808975": {
+      "name": "实验楼A栋",
+      "category": "building",
+      "zone": "teaching",
+      "minZoom": 17,
+      "parentId": "osm-relation-4105911",
+      "aliases": ["实验楼A", "A栋"],
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；源轮廓标签锚点，非已核验建筑入口"
+    },
+    "osm-node-3125808984": {
+      "name": "实验楼B栋",
+      "category": "building",
+      "zone": "teaching",
+      "minZoom": 17,
+      "parentId": "osm-relation-4105911",
+      "aliases": ["实验楼B", "B栋"],
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；源轮廓标签锚点，非已核验建筑入口"
+    },
+    "osm-node-3125808994": {
+      "name": "实验楼C栋",
+      "category": "building",
+      "zone": "teaching",
+      "minZoom": 17,
+      "parentId": "osm-relation-4105911",
+      "aliases": ["实验楼C", "C栋"],
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；源轮廓标签锚点，非已核验建筑入口"
+    },
+    "osm-node-3125809005": {
+      "name": "实验楼D栋",
+      "category": "building",
+      "zone": "teaching",
+      "minZoom": 17,
+      "parentId": "osm-relation-4105911",
+      "aliases": ["实验楼D", "D栋"],
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；源轮廓标签锚点，非已核验建筑入口"
+    },
+    "osm-node-3125809014": {
+      "name": "实验楼E栋",
+      "category": "building",
+      "zone": "teaching",
+      "minZoom": 17,
+      "parentId": "osm-relation-4105911",
+      "aliases": ["实验楼E", "E栋"],
+      "nameSource": "负责人2026-10-13浏览器批注与指定校区图；源轮廓标签锚点，非已核验建筑入口"
+    },
+    "osm-way-1410275259": {
+      "name": "下沉广场",
+      "category": "plaza",
+      "zone": "living",
+      "minZoom": 15,
+      "nameSource": "OpenStreetMap命名广场与负责人指定校区图"
+    },
+    "osm-way-864205124": {
+      "name": "下沉隧道",
+      "aliases": ["南校隧道", "南校地下隧道"],
+      "category": "transport",
+      "zone": "connection",
+      "minZoom": 15,
+      "nameSource": "负责人2026-10-13确认：下沉隧道及两端台阶正常通行；几何使用原始OSM",
+      "navigationVerified": true,
+      "navigationReviewedAt": "2026-10-13",
+      "navigationSource": "负责人确认隧道及两端台阶正常通行"
+    },
+    "osm-node-6110327053": {
+      "name": "下沉隧道生活区入口",
+      "category": "entrance",
+      "zone": "living",
+      "minZoom": 17,
+      "nameSource": "负责人2026-10-13确认：下沉隧道及两端台阶正常通行；几何使用原始OSM",
+      "navigationVerified": true,
+      "navigationReviewedAt": "2026-10-13",
+      "navigationSource": "负责人确认隧道及两端台阶正常通行"
+    },
+    "osm-node-6110327054": {
+      "name": "下沉隧道教学区入口",
+      "category": "entrance",
+      "zone": "teaching",
+      "minZoom": 17,
+      "nameSource": "负责人2026-10-13确认：下沉隧道及两端台阶正常通行；几何使用原始OSM",
+      "navigationVerified": true,
+      "navigationReviewedAt": "2026-10-13",
+      "navigationSource": "负责人确认隧道及两端台阶正常通行"
+    }
+  }
+}

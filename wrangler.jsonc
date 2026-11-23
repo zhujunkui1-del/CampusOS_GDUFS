@@ -1,0 +1,122 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "campusos-local",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-10-12",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [
+    { "binding": "WORKER_SELF_REFERENCE", "service": "campusos-local" },
+  ],
+  "vars": { "APP_ENV": "local" },
+  "ratelimits": [
+    {
+      "name": "MAP_RATE_LIMITER",
+      "namespace_id": "2101",
+      "simple": { "limit": 120, "period": 60 },
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "campusos-local",
+      "database_id": "11111111-1111-4111-8111-111111111111",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "env": {
+    "preview": {
+      "name": "campusos-preview",
+      "main": "preview-worker.ts",
+      "workers_dev": true,
+      "preview_urls": false,
+      "routes": [
+        {
+          "pattern": "campusos-console.example.com/api/console-*",
+          "zone_name": "example.com",
+        },
+        {
+          "pattern": "campusos-console.example.com/api/admin*",
+          "zone_name": "example.com",
+        },
+      ],
+      "triggers": { "crons": ["* * * * *"] },
+      "vars": {
+        "APP_ENV": "preview",
+        "USER_ACCOUNTS_ENABLED": "true",
+        "ACCOUNT_ORIGIN": "https://campusos-preview.example.workers.dev",
+        "ACCOUNT_ALLOWED_ORIGINS": "https://campusos.example.com",
+        "CONSOLE_ALLOWED_ORIGINS": "https://campusos.example.com,https://campusos-console.example.com",
+        "EXTERNAL_SEARCH_TRANSPORT": "cloud",
+        "AGENT_VALIDATION_UNLIMITED": "true",
+        "MODEL_MAX_OUTPUT_TOKENS": "2048",
+        // DeepSeek is the primary platform model and StepFun the backup.
+        // MODEL_PRIORITY=stepfun restores the previous Step-first order.
+        "MODEL_PRIORITY": "deepseek",
+        // Campus gateway (modelsq.gdufs.edu.cn) is only reachable from the
+        // campus network, so it stays out of the default chain. Set
+        // MODEL_PRIORITY=gdufs to make it the primary tier; secrets stay out
+        // of this file.
+        "GDUFS_MODEL_NAME": "DeepSeek-V4.1-Flash-1017",
+        "GDUFS_MODEL_BASE_URL": "https://modelsq.gdufs.edu.cn/v1-openai",
+        "HYBRID_RETRIEVAL": "true",
+        "VECTOR_BACKFILL": "true",
+        "CALENDAR_ENABLED": "true",
+        "CALENDAR_AUTO_ENRICH": "true",
+        "IMAGE_OCR_ENABLED": "true",
+        "IMAGE_OCR_MODEL": "@cf/google/gemma-4-26b-a4b-it",
+        "IMAGE_OCR_DAILY_CAP": "120",
+        "DIFY_CHAT_ENABLED": "false",
+      },
+      "ai": { "binding": "AI" },
+      "vectorize": [
+        { "binding": "VECTOR_INDEX", "index_name": "campusos-chunks" },
+      ],
+      "ratelimits": [
+        {
+          "name": "MAP_RATE_LIMITER",
+          "namespace_id": "2102",
+          "simple": { "limit": 120, "period": 60 },
+        },
+      ],
+      "services": [
+        { "binding": "WORKER_SELF_REFERENCE", "service": "campusos-preview" },
+        {
+          "binding": "CLOUD_SEARCH",
+          "service": "campusos-preview-cloud-search",
+        },
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "campusos-preview",
+          "database_id": "22222222-2222-4222-8222-222222222222",
+          "migrations_dir": "migrations",
+        },
+      ],
+    },
+    "production": {
+      "name": "campusos",
+      "vars": { "APP_ENV": "production", "MODEL_PRIORITY": "deepseek" },
+      "ratelimits": [
+        {
+          "name": "MAP_RATE_LIMITER",
+          "namespace_id": "2103",
+          "simple": { "limit": 120, "period": 60 },
+        },
+      ],
+      "services": [
+        { "binding": "WORKER_SELF_REFERENCE", "service": "campusos" },
+      ],
+      "routes": [{ "pattern": "campusos.example.com", "custom_domain": true }],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "campusos-production",
+          "database_id": "33333333-3333-4333-8333-333333333333",
+          "migrations_dir": "migrations",
+        },
+      ],
+    },
+  },
+}

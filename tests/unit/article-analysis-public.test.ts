@@ -1,0 +1,241 @@
+import { it, expect } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { RegistrationBadge } from "@/features/content/registration-badge";
+import { dateGateFixture, command } from "../fixtures/date-gate";
+import { analysisStatements } from "@/lib/server/console/article-analysis";
+import { readPublicContent } from "@/lib/server/console/public-content";
+import {
+  readPublicActivities,
+  readPublicAnalysis,
+} from "@/lib/server/console/public-analysis";
+it("public analysis returns evidence references without distributing the full OCR or attachment transcript", async () => {
+  const f = await dateGateFixture();
+  try {
+    const d = await f.store.document("spring");
+    await f.db.batch(
+      await analysisStatements(f.db, d.id, d.contentRevision, d.inputHash!, {
+        title: "2026年讲座预告",
+        body: "详情见海报",
+        calendarSources: [
+          {
+            id: "poster",
+            kind: "image",
+            url: "https://lib.gdufs.edu.cn/p.png",
+            locator: "img[1]",
+            digest: "isolated",
+            method: "isolated-ocr",
+            text: "讲座时间：2026年11月5日14:30。其余附加文字。",
+          },
+        ],
+      }),
+    );
+    const r = await readPublicAnalysis(f.db, d.id);
+    expect(r.analysis?.calendar?.sources).toEqual([]);
+    expect(r.analysis?.activities[0].calendar?.origins[0].url).toBe(
+      "https://lib.gdufs.edu.cn/p.png",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+it("the registration badge uses category theme and an expired deadline does not remove it", () => {
+  const html = renderToStaticMarkup(
+    createElement(RegistrationBadge, { show: true, category: "competition" }),
+  );
+  expect(html).toContain(">报</span>");
+  expect(html).toContain("--feed-accent");
+  expect(html).toContain("article-registration-badge");
+  expect(
+    renderToStaticMarkup(createElement(RegistrationBadge, { show: false })),
+  ).toBe("");
+});
+it("effective categories preserve public unknown articles and paginate them without campus notice fallback", async () => {
+  const f = await dateGateFixture();
+  try {
+    const d = await f.store.document("spring");
+    await f.db.batch(
+      await analysisStatements(f.db, d.id, d.contentRevision, d.inputHash!, {
+        title: d.title,
+        body: d.body,
+        bodyFormat: "reading_html",
+      }),
+    );
+    const grouped = await readPublicContent(f.db, {
+      surface: "radar",
+      grouped: "1",
+    });
+    expect(grouped.counts.unclassified).toBe(1);
+    expect(grouped.groups?.unclassified[0].id).toBe("spring");
+    const known = await readPublicContent(f.db, {
+      surface: "knowledge",
+      grouped: "1",
+    });
+    expect(known.total).toBe(2);
+    expect(
+      (
+        await readPublicContent(f.db, {
+          surface: "radar",
+          category: "unclassified",
+        })
+      ).items[0].primaryDestination,
+    ).toBe("unknown");
+  } finally {
+    f.close();
+  }
+});
+it("indexed activities expose source evidence and disappear immediately on manual withdrawal", async () => {
+  const f = await dateGateFixture();
+  try {
+    const d = await f.store.document("spring");
+    const input = {
+      title: "隔离讲座报名通知",
+      body: "讲座时间：2026年11月5日15:00；报名时间：2026年10月1日10:00至2026年11月3日17:00。地点：大学城图书馆。",
+      publishedAt: "2026-10-01",
+    };
+    await f.db.batch(
+      await analysisStatements(
+        f.db,
+        d.id,
+        d.contentRevision,
+        d.inputHash!,
+        input,
+      ),
+    );
+    const r = await readPublicActivities(
+      f.db,
+      { after: "2026-11-01", before: "2026-11-10", registration: "open" },
+      "2026-10-25T12:00:00+08:00",
+    );
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0].sources[0].originalUrl).toBe(d.url);
+    expect(r.items[0].activity.registrationWindows[0].end?.evidence.text).toBe(
+      "2026年11月3日17:00",
+    );
+    await f.store.publish(
+      d.id,
+      { ...command(d.version), note: "下架测试" },
+      true,
+    );
+    expect(
+      (await readPublicActivities(f.db, {}, "2026-10-25T12:00:00+08:00")).items,
+    ).toEqual([]);
+    await expect(readPublicAnalysis(f.db, d.id)).rejects.toThrow(
+      "此文章尚未公开或已下架",
+    );
+  } finally {
+    f.close();
+  }
+});
+it("a warm grouped result rechecks visibility and invalidates counts after a withdrawal", async () => {
+  const f = await dateGateFixture();
+  try {
+    const initial = await readPublicContent(f.db, {
+      surface: "knowledge",
+      grouped: "1",
+    });
+    expect(initial.total).toBe(3);
+    const warm = await readPublicContent(f.db, {
+      surface: "knowledge",
+      grouped: "1",
+    });
+    expect(warm).toEqual(initial);
+    const d = await f.store.document("spring");
+    await f.store.publish(
+      d.id,
+      { ...command(d.version), note: "缓存下架核对" },
+      true,
+    );
+    const after = await readPublicContent(f.db, {
+      surface: "knowledge",
+      grouped: "1",
+    });
+    expect(after.total).toBe(2);
+    expect(after.items.map((d) => d.id)).not.toContain("spring");
+  } finally {
+    f.close();
+  }
+});
+it("does not merge same-title activities at the same venue on the same day but different times", async () => {
+  const f = await dateGateFixture();
+  try {
+    const d = await f.store.document("spring");
+    await f.db.batch(
+      await analysisStatements(f.db, d.id, d.contentRevision, d.inputHash!, {
+        title: "讲座汇总",
+        publishedAt: "2026-10-25",
+        body: "活动名称：人工智能讲座\n讲座时间：2026年11月5日15:00\n地点：大学城图书馆\n活动名称：人工智能讲座\n讲座时间：2026年11月5日19:00\n地点：大学城图书馆",
+      }),
+    );
+    const results = await readPublicActivities(f.db, {
+      after: "2026-11-05",
+      before: "2026-11-05",
+    });
+    expect(results.items).toHaveLength(2);
+  } finally {
+    f.close();
+  }
+});
+import { searchTerm } from "@/lib/server/console/public-content";
+it("keeps long Chinese search terms for instr without a LIKE pattern", () => {
+  const full =
+    "2026年志愿服务冬季论坛暨广州市社会学人类学学会年会会议通知（第一轮）".repeat(
+      3,
+    );
+  const term = searchTerm(full);
+  expect(term.length).toBeLessThanOrEqual(300);
+  expect(term).toBe(full.slice(0, 300));
+  expect(full.startsWith(term)).toBe(true);
+});
+
+it("enqueues article images during projection so new posts reach OCR automatically", async () => {
+  const f = await dateGateFixture();
+  try {
+    const d = await f.store.document("spring");
+    await f.db.batch(
+      await analysisStatements(f.db, d.id, d.contentRevision, d.inputHash!, {
+        title: d.title,
+        body: '<div class="v_news_content"><p><img data-src="https://mmbiz.qpic.cn/poster/640" /></p></div>',
+        bodyFormat: "reading_html" as const,
+        originalUrl: "https://mp.weixin.qq.com/s/test",
+      }, undefined, "licensed_full_text"),
+    );
+    const row = f.sqlite
+      .prepare("SELECT url,status FROM article_images WHERE document_id=?")
+      .get(d.id) as { url: string; status: string } | undefined;
+    expect(row?.url).toBe("https://mmbiz.qpic.cn/poster/640");
+    expect(row?.status).toBe("pending");
+  } finally {
+    f.close();
+  }
+});
+
+it("publishes a regex-confident dated event without waiting for the AI review budget", async () => {
+  const f = await dateGateFixture();
+  try {
+    const d = await f.store.document("spring");
+    await f.db.batch(
+      await analysisStatements(
+        f.db,
+        d.id,
+        d.contentRevision,
+        d.inputHash!,
+        {
+          title: "人工智能治理沙龙第17期",
+          body: "讲座时间：2026年11月25日 19:30 地点：白云山校区304会议室",
+        },
+        undefined,
+        "licensed_full_text",
+        null,
+        true,
+      ),
+    );
+    const row = f.sqlite
+      .prepare("SELECT calendar_status FROM document_article_analysis WHERE document_id=?")
+      .get(d.id) as { calendar_status: string } | undefined;
+    expect(row?.calendar_status).toBe("accepted");
+  } finally {
+    f.close();
+  }
+});

@@ -1,0 +1,274 @@
+import type { ContentSearchResult } from "@/domain/retrieval/skills";
+import { buildQueryPlan, queryRelevance } from "./query-plan";
+import { evidenceWindow } from "./evidence-window";
+import { chinaDate } from "@/lib/retrieval/calendar-dates";
+import {
+  asksPaymentProcedure,
+  paymentChannelEvidence,
+  paymentSubjects,
+} from "./payment-evidence";
+
+export function answersPreviousTopic(
+  answer: string,
+  current: string,
+  previous: string,
+) {
+  const currentTopics = buildQueryPlan(current).topics;
+  if (
+    !currentTopics.length ||
+    currentTopics.some(({ alternatives }) =>
+      alternatives.some((term) => answer.includes(term)),
+    )
+  )
+    return false;
+  const currentIds = new Set(currentTopics.map(({ id }) => id));
+  return buildQueryPlan(previous).topics.some(
+    ({ id, alternatives }) =>
+      !currentIds.has(id) && alternatives.some((term) => answer.includes(term)),
+  );
+}
+
+function hasPaymentChannel(
+  query: string,
+  hits: { contentSnippet?: string; snippet?: string }[],
+) {
+  const plan = buildQueryPlan(query);
+  const subjects = paymentSubjects(
+    query,
+    plan.topics.flatMap((topic) => topic.alternatives),
+  );
+  return hits.some(
+    (hit) =>
+      paymentChannelEvidence(
+        hit.contentSnippet ?? hit.snippet ?? "",
+        plan.campus,
+        subjects,
+      ).score >= (plan.campus ? 2 : 1),
+  );
+}
+
+export function isDirectPaymentEvidence(
+  query: string,
+  hit: {
+    bodyAvailable?: boolean;
+    official?: boolean;
+    contentSnippet?: string;
+    snippet?: string;
+  },
+) {
+  return (
+    !!hit.official &&
+    !!hit.bodyAvailable &&
+    asksPaymentProcedure(query) &&
+    hasPaymentChannel(query, [hit])
+  );
+}
+
+/** Related links are not necessarily instructions for the requested workflow. */
+export function supportsAnswerPurpose(
+  query: string,
+  hit: { title: string; contentSnippet?: string; snippet?: string },
+) {
+  if (asksPaymentProcedure(query)) return hasPaymentChannel(query, [hit]);
+  if (buildQueryPlan(query).goal !== "procedure") return true;
+  return (
+    /指南|流程|操作|步骤|借阅规则|借还书/.test(hit.title) ||
+    evidenceWindow(hit.contentSnippet ?? hit.snippet ?? "", query, 780)
+      .priority > 0 ||
+    /提交|(?:应当|需要|须|应).{0,40}(?:申请|办理)|向.{0,30}(?:申请|办理)/.test(
+      hit.contentSnippet ?? hit.snippet ?? "",
+    )
+  );
+}
+
+type Activity = ContentSearchResult["activities"][number];
+export function openParticipation(
+  a: Activity,
+  title: string,
+  now = Date.now(),
+) {
+  if (
+    a.historical ||
+    ["cancelled", "postponed", "ended", "historical"].includes(a.eventStatus) ||
+    /颁奖典礼|晋级名单|赛事回顾|获奖喜报|人物事迹/.test(title)
+  )
+    return false;
+  if (a.endsAt?.at && Date.parse(a.endsAt.at) <= now) return false;
+  if (a.startsAt?.at && Date.parse(a.startsAt.at) <= now) return false;
+  if (a.registrationState === "not_required")
+    return !!a.startsAt?.date && a.startsAt.date > chinaDate(now);
+  return (
+    a.registrationState === "open" &&
+    a.registrationWindows.some((window) => window.state === "open")
+  );
+}
+export function activityAvailability(a: Activity, now = Date.now()) {
+  const today = new Date(now + 28800000).toISOString().slice(0, 10);
+  const before = (t: Activity["startsAt"]) =>
+    !!t && (t.at ? Date.parse(t.at) < now : !!t.date && t.date < today);
+  const after = (t: Activity["startsAt"]) =>
+    !!t && (t.at ? Date.parse(t.at) > now : !!t.date && t.date > today);
+  const eventState = ["cancelled", "postponed"].includes(a.eventStatus)
+    ? a.eventStatus
+    : a.eventStatus === "ended" || before(a.endsAt)
+      ? "ended"
+      : !a.endsAt && before(a.startsAt)
+        ? "started_end_unknown"
+        : after(a.startsAt)
+          ? "upcoming"
+          : a.startsAt && a.endsAt && !after(a.startsAt) && !before(a.endsAt)
+            ? "ongoing"
+            : "unknown";
+  const participation =
+    eventState === "ended" || eventState === "cancelled"
+      ? "closed"
+      : a.registrationState === "open"
+        ? "registration_open_eligibility_unknown"
+        : a.registrationState === "not_required" &&
+            ["upcoming", "ongoing"].includes(eventState)
+          ? "no_registration_eligibility_unknown"
+          : "unknown";
+  return {
+    existence: "documented" as const,
+    eventState,
+    registrationState: a.registrationState,
+    participation,
+  };
+}
+export type EvidenceInput = {
+  hits: (Pick<
+    ContentSearchResult["hits"][number],
+    "bodyAvailable" | "contentSnippet"
+  > &
+    Partial<ContentSearchResult["hits"][number]>)[];
+  activities: Activity[];
+};
+export function assessEvidence(
+  query: string,
+  results: EvidenceInput[],
+  options: { officialOnly?: boolean; failed?: boolean; now?: number } = {},
+) {
+  const plan = buildQueryPlan(query),
+    hits = results.flatMap((r) => r.hits),
+    related = hits.filter(
+      (h) =>
+        queryRelevance(plan, h).relevant || isDirectPaymentEvidence(query, h),
+    ),
+    bodies = related.filter((h) => h.bodyAvailable),
+    ids = new Set(bodies.map((h) => h.documentId));
+  const activities = results
+    .flatMap((r) => r.activities)
+    .filter((a) => ids.has(a.documentId))
+    .map((a) => ({
+      documentId: a.documentId,
+      ...activityAvailability(a, options.now),
+      openParticipation: openParticipation(
+        a,
+        bodies.find((hit) => hit.documentId === a.documentId)?.title ?? a.name,
+        options.now,
+      ),
+    }));
+  const missing: string[] = [];
+  if (!bodies.length) missing.push("relevant_readable_evidence");
+  if (options.officialOnly && !bodies.some((h) => h.official))
+    missing.push("official_authority_unconfirmed");
+  const text = bodies.map((h) => h.contentSnippet).join("\n");
+  if (asksPaymentProcedure(query)) {
+    if (
+      !hasPaymentChannel(
+        query,
+        options.officialOnly ? bodies.filter((hit) => hit.official) : bodies,
+      )
+    )
+      missing.push("payment_channel_evidence");
+  } else if (
+    plan.goal === "procedure" &&
+    !/流程|办理|步骤|指南|手续|登录|点击|凭.{0,12}(?:卡|证)|依次|提交/.test(
+      text,
+    )
+  )
+    missing.push("procedure_evidence");
+  if (
+    plan.goal === "requirements" &&
+    !/条件|资格|材料|要求|须|需提供|需满足|面向|适用/.test(text)
+  )
+    missing.push("requirement_evidence");
+  if (
+    plan.goal === "policy" &&
+    !/办法|规定|规则|制度|政策|第[一二三四五六七八九十]+条/.test(text)
+  )
+    missing.push("policy_evidence");
+  if (
+    plan.goal === "experience" &&
+    !/推荐|体验|好吃|不好吃|味道|口味|入住|居住|隔音|亲测/.test(text)
+  )
+    missing.push("experience_evidence");
+  const current =
+    plan.goal === "participation" ||
+    plan.goal === "registration" ||
+    /近期|最近|今天|本周|这周|下周|下个月/.test(plan.temporalExpression || "");
+  if (
+    current &&
+    !activities.some(
+      (a) =>
+        ["upcoming", "ongoing"].includes(a.eventState) ||
+        a.registrationState === "open",
+    )
+  )
+    missing.push("current_event_evidence");
+  if (
+    (plan.goal === "participation" || plan.goal === "registration") &&
+    !activities.some(
+      (a) =>
+        a.openParticipation ||
+        (plan.goal === "participation" &&
+          a.participation === "no_registration_eligibility_unknown"),
+    )
+  )
+    missing.push("participation_or_registration_evidence");
+  const state =
+    options.failed && !hits.length
+      ? "search_failed"
+      : !hits.length
+        ? "no_candidates"
+        : !related.length
+          ? "off_topic"
+          : !bodies.length
+            ? "metadata_or_authority_insufficient"
+            : missing.length
+              ? "related_but_incomplete"
+              : "supported";
+  return {
+    state,
+    relatedDocuments: [
+      ...new Set(related.map((h) => h.documentId).filter(Boolean)),
+    ],
+    missing,
+    activities,
+    needsSupplement: state !== "supported",
+    negativeExistenceProven: false as const,
+  };
+}
+export function falseNegativeAnswer(
+  answer: string,
+  query: string,
+  results: EvidenceInput[],
+) {
+  const assessment = assessEvidence(query, results);
+  if (!assessment.relatedDocuments.length) return false;
+  // Only a denial about the *related material itself* can be a recall failure.
+  // "没有具体开放时间" / "没有查到递交窗口" are honest limitations of the
+  // corpus, not claims that the retrieved articles do not exist.
+  //
+  // A list-shaped question ("有哪些比赛") is the one case where saying "no
+  // related articles" contradicts the hits we just returned. A fact question
+  // ("入党申请书交给谁") that fetched same-topic articles lacking the answer
+  // slot is exactly what an honest refusal looks like, and flagging it made
+  // the model rewrite until the run died as MODEL_SERVICE_UNAVAILABLE.
+  const goal = buildQueryPlan(query).goal;
+  if (!["discovery", "participation", "registration"].includes(goal))
+    return false;
+  return /(?:没有|未(?:能)?(?:找到|查到|检索到)|没(?:找到|查到))[^。\n]{0,20}(?:相关|(?:活动|赛事|讲座|通知|名单|安排)(?:信息|通知|文章|资料)?)/.test(
+    answer,
+  );
+}

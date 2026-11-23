@@ -1,0 +1,548 @@
+// Explicit owner-authorized integration of self-authored geometry; no reference photos are published.
+import { readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { format } from "prettier";
+import {
+  Scene,
+  InstancedMesh,
+  BoxGeometry,
+  MeshStandardMaterial,
+  Matrix4,
+  Vector3,
+} from "three";
+import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
+const read = async (p) => JSON.parse(await readFile(p, "utf8")),
+  sha = (b) => createHash("sha256").update(b).digest("hex"),
+  campus = await read("src/features/campus-map/data/campus.json"),
+  pilot = await read("src/features/campus-map/data/nanyuan7-model.json"),
+  map = await read("src/features/campus-map/data/local-map-manifest.json"),
+  out = "public/models/campus";
+if (map.version !== campus.mapVersion)
+  throw new Error("Campus and source map versions differ");
+await mkdir(out, { recursive: true });
+const entries = [],
+  courts = new Map();
+function checkSource(id, geometry) {
+  const p = campus.places.find((p) => p.id === id);
+  if (!p || JSON.stringify(geometry) !== JSON.stringify(p.geometry))
+    throw new Error(`Source mismatch ${id}`);
+}
+async function asset(root, a, key, mode, preservedUrl) {
+  const file = `${root}/${a.url.replace("./", "")}`,
+    b = await readFile(file),
+    hash = sha(b);
+  if (
+    hash !== a.sha256 ||
+    b.length !== a.bytes ||
+    b.toString("utf8", 0, 4) !== "glTF"
+  )
+    throw new Error(`Asset integrity ${file}`);
+  const json = JSON.parse(b.subarray(20, 20 + b.readUInt32LE(12)).toString());
+  if (
+    json.images?.length ||
+    json.textures?.length ||
+    json.buffers.some((v) => v.uri)
+  )
+    throw new Error(`External/image resource ${file}`);
+  const name = `${key}-${mode}-${hash.slice(0, 12)}.glb`;
+  if (preservedUrl) {
+    if (sha(await readFile(`public${preservedUrl}`)) !== hash)
+      throw new Error(`Preserved asset mismatch ${key}`);
+  } else {
+    const target = `${out}/${name}`;
+    let existing;
+    try {
+      existing = await readFile(target);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (!existing || sha(existing) !== hash) await copyFile(file, target);
+  }
+  return {
+    url: preservedUrl || `/models/campus/${name}`,
+    sha256: hash,
+    bytes: b.length,
+    triangles: a.triangles,
+    drawCalls: a.drawCalls,
+    bounds: a.bounds,
+  };
+}
+async function add(
+  key,
+  name,
+  id,
+  root,
+  m,
+  assets,
+  sourceIds = [id],
+  members = [],
+  preservedFullUrl,
+) {
+  if (m.sourceMapVersion !== campus.mapVersion)
+    throw new Error(`Map version ${key}`);
+  if (id && !campus.places.some((p) => p.id === id))
+    throw new Error(`Unknown ${id}`);
+  const origin = assets["3d"].origin || m.origin,
+    record = {
+      key,
+      name,
+      placeId: id,
+      memberPlaceIds: [...new Set([id, ...members].filter(Boolean))],
+      footprintSourceIds: sourceIds.filter(Boolean),
+      origin,
+      pickable: !!id,
+      heightAccuracy: m.heightAccuracy || "visual_estimate",
+      assets: {},
+    };
+  for (const mode of ["2.5d", "3d"])
+    record.assets[mode] = await asset(
+      root,
+      assets[mode],
+      key,
+      mode,
+      mode === "3d" ? preservedFullUrl : undefined,
+    );
+  entries.push(record);
+}
+async function collectCourts(root, file) {
+  try {
+    const data = await read(`${root}/${file}`);
+    for (const f of data.features)
+      if (f.geometry.type === "Polygon")
+        for (const ring of f.geometry.coordinates.slice(1)) {
+          const key = sha(JSON.stringify(ring));
+          if (!courts.has(key))
+            courts.set(key, {
+              type: "Feature",
+              properties: { displayOnly: true },
+              geometry: { type: "Polygon", coordinates: [ring] },
+            });
+        }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+for (const [key, folder, file] of [
+  ["library", "library-v1", "library"],
+  ["art", "art-building-v1", "art-building"],
+  ["auditorium", "auditorium-v1", "auditorium"],
+  ["b8", "b8-lecture-hall-v1", "b8-lecture-hall"],
+  ["faculty", "faculty-office-v1", "faculty-office"],
+  ["gymnasium", "gymnasium-v1", "gymnasium"],
+  ["stadium", "stadium-v1", "stadium"],
+]) {
+  const root = `docs/model-previews/${folder}`,
+    m = await read(`${root}/manifest.json`);
+  checkSource(m.placeId, m.sourceGeometryWgs84 || m.sourcePlaceGeometryWgs84);
+  await add(
+    key,
+    campus.places.find((p) => p.id === m.placeId).name,
+    m.placeId,
+    root,
+    m,
+    m.assets,
+    [m.footprintSourceId || m.placeId],
+  );
+  await collectCourts(root, `${file}-2.5d.geojson`);
+}
+for (const [key, folder, file] of [
+  ["laboratory", "laboratory-a-e-v1", "laboratory-a-e"],
+  ["teaching-efg", "teaching-e-f-g-v1", "teaching-e-f-g"],
+]) {
+  const root = `docs/model-previews/${folder}`,
+    m = await read(`${root}/manifest.json`),
+    p = campus.places.find((p) => p.id === m.placeId);
+  if (
+    JSON.stringify(m.sourceGeometryRingsWgs84) !==
+    JSON.stringify(p.geometryRings)
+  )
+    throw new Error(`Parent rings ${key}`);
+  const members = campus.places
+    .filter((p) => p.parentId === m.placeId)
+    .map((p) => p.id);
+  await add(key, p.name, p.id, root, m, m.assets, [p.id], members);
+  await collectCourts(root, `${file}-2.5d.geojson`);
+}
+{
+  const root = "docs/model-previews/administration-complex-v1",
+    m = await read(`${root}/manifest.json`);
+  checkSource(m.parentPlaceId, m.sourceParentGeometryWgs84);
+  checkSource(m.pavilionPlaceId, m.sourcePavilionGeometryWgs84);
+  await add(
+    "administration",
+    "校行政办公楼",
+    m.parentPlaceId,
+    root,
+    m,
+    m.componentAssets.administration,
+  );
+  await add(
+    "pavilion",
+    "八角楼",
+    m.pavilionPlaceId,
+    root,
+    m,
+    m.componentAssets.pavilion,
+  );
+  await collectCourts(root, "administration-complex-2.5d.geojson");
+}
+const teachingRoot = "docs/model-previews/teaching-a-d-v2",
+  teaching = await read(`${teachingRoot}/manifest.json`);
+for (const key of ["A", "B", "C", "D"]) {
+  const s = teaching.sources[key];
+  checkSource(s.placeId, s.geometryRingsWgs84[0]);
+  await add(
+    `teaching-${key}`,
+    s.name,
+    s.placeId,
+    teachingRoot,
+    teaching,
+    teaching.componentAssets[key],
+  );
+}
+await collectCourts(teachingRoot, "teaching-a-d-2.5d.geojson");
+{
+  const root = "docs/model-previews/north-south-dormitories-v1",
+    m = await read(`${root}/manifest.json`);
+  for (const key of m.individualBuildingKeys) {
+    const e = m.entries[key];
+    checkSource(e.placeId, e.sourceGeometryWgs84);
+    if (
+      key === "s7" &&
+      (e.assets["3d"].sha256 !== pilot.assets.full.sha256 ||
+        JSON.stringify(e.origin) !== JSON.stringify(pilot.origin) ||
+        JSON.stringify(e.courtyardWgs84) !==
+          JSON.stringify(pilot.courtyardGeometry.coordinates[0]))
+    )
+      throw new Error("South-7 approved geometry mismatch");
+    await add(
+      `dormitory-${key}`,
+      e.name,
+      e.placeId,
+      root,
+      { ...m, origin: e.origin, heightAccuracy: e.heightAccuracy },
+      e.assets,
+      [e.placeId],
+      [],
+      key === "s7" ? pilot.assets.full.url : undefined,
+    );
+    if (key === "s7") continue; // Its existing native courtyard remains the shared ground fill.
+    const k = sha(JSON.stringify(e.courtyardWgs84));
+    courts.set(k, {
+      type: "Feature",
+      properties: { displayOnly: true },
+      geometry: { type: "Polygon", coordinates: [e.courtyardWgs84] },
+    });
+  }
+}
+{
+  const root = "docs/model-previews/youyuan-v1",
+    m = await read(`${root}/manifest.json`),
+    p = campus.places.find((place) => place.id === m.placeId);
+  if (!p || p.name !== "友苑") throw new Error("Youyuan source place");
+  checkSource(m.placeId, m.sourceGeometryWgs84);
+  if (m.sourceFootprintSha256 !== sha(JSON.stringify(p.geometry)))
+    throw new Error("Youyuan footprint hash mismatch");
+  const assets = Object.fromEntries(
+    ["2.5d", "3d"].map((mode) => [
+      mode,
+      { ...m.assets[mode], url: `./${m.assets[mode].file}` },
+    ]),
+  );
+  await add("youyuan", p.name, p.id, root, m, assets, [p.id]);
+}
+{
+  const root = "docs/model-previews/shiyuan-1-4-v1",
+    m = await read(`${root}/manifest.json`);
+  if (m.sourceMapVersion !== campus.mapVersion)
+    throw new Error("Shiyuan map version");
+  if (!Array.isArray(m.buildings) || m.buildings.length !== 4)
+    throw new Error("Expected four Shiyuan buildings");
+  for (const building of m.buildings) {
+    checkSource(building.placeId, building.sourceGeometryWgs84);
+    const assets = Object.fromEntries(
+      ["2.5d", "3d"].map((mode) => [
+        mode,
+        {
+          ...building.assets[mode],
+          url: `./${building.assets[mode].file}`,
+        },
+      ]),
+    );
+    await add(
+      building.key,
+      building.name,
+      building.placeId,
+      root,
+      {
+        ...m,
+        origin: building.origin,
+        heightAccuracy: building.heightAccuracy,
+      },
+      assets,
+      [building.placeId],
+    );
+  }
+}
+{
+  const root = "docs/model-previews/student-activity-center-v1",
+    m = await read(`${root}/manifest.json`);
+  checkSource(m.placeId, m.sourceGeometryWgs84);
+  const assets = Object.fromEntries(
+    ["2.5d", "3d"].map((mode) => [
+      mode,
+      { ...m.assets[mode], url: `./${m.assets[mode].file}` },
+    ]),
+  );
+  await add("student-activity-center", m.name, m.placeId, root, m, assets, [
+    m.placeId,
+  ]);
+  await collectCourts(root, "student-activity-center-2.5d.geojson");
+}
+{
+  const root = "docs/model-previews/academic-exchange-center-v1",
+    m = await read(`${root}/manifest.json`),
+    p = campus.places.find((place) => place.id === m.placeId);
+  if (!p || p.name !== "学术交流中心")
+    throw new Error("Academic exchange center source place");
+  if (
+    JSON.stringify(m.sourceGeometryRingsWgs84) !==
+    JSON.stringify(p.geometryRings)
+  )
+    throw new Error("Academic exchange center source rings mismatch");
+  checkSource(m.placeId, m.sourceGeometryWgs84);
+  const assets = Object.fromEntries(
+    ["2.5d", "3d"].map((mode) => [
+      mode,
+      { ...m.assets[mode], url: `./${m.assets[mode].file}` },
+    ]),
+  );
+  await add("academic-exchange-center", p.name, p.id, root, m, assets, [p.id]);
+  await collectCourts(root, "academic-exchange-center-2.5d.geojson");
+}
+{
+  const root = "docs/model-previews/wencai-cafeteria-v1",
+    m = await read(`${root}/manifest.json`);
+  if (m.placeId !== "osm-way-313039048" || m.name !== "文采园（一饭）")
+    throw new Error("Wencai cafeteria source place");
+  checkSource(m.placeId, m.sourceGeometryWgs84);
+  const assets = Object.fromEntries(
+    ["2.5d", "3d"].map((mode) => [
+      mode,
+      { ...m.assets[mode], url: `./${m.assets[mode].file}` },
+    ]),
+  );
+  await add("wencai-cafeteria", m.name, m.placeId, root, m, assets, [
+    m.placeId,
+  ]);
+}
+{
+  const root = "docs/model-previews/boya-cafeteria-v1",
+    m = await read(`${root}/manifest.json`);
+  if (m.placeId !== "osm-way-313039061" || m.name !== "博雅园（二饭）")
+    throw new Error("Boya cafeteria source place");
+  checkSource(m.placeId, m.sourceGeometryWgs84);
+  const assets = Object.fromEntries(
+    ["2.5d", "3d"].map((mode) => [
+      mode,
+      { ...m.assets[mode], url: `./${m.assets[mode].file}` },
+    ]),
+  );
+  await add("boya-cafeteria", m.name, m.placeId, root, m, assets, [m.placeId]);
+}
+{
+  const root = "docs/model-previews/fengcai-cafeteria-v1",
+    m = await read(`${root}/manifest.json`);
+  if (m.placeId !== "osm-way-313039057" || m.name !== "风采园（三饭）")
+    throw new Error("Fengcai cafeteria source place");
+  checkSource(m.placeId, m.sourceGeometryWgs84);
+  const assets = Object.fromEntries(
+    ["2.5d", "3d"].map((mode) => [
+      mode,
+      { ...m.assets[mode], url: `./${m.assets[mode].file}` },
+    ]),
+  );
+  await add("fengcai-cafeteria", m.name, m.placeId, root, m, assets, [
+    m.placeId,
+  ]);
+}
+{
+  const root = "docs/model-previews/outpatient-clinic-v1",
+    m = await read(`${root}/manifest.json`);
+  if (m.placeId !== "osm-way-313039046" || m.name !== "门诊部")
+    throw new Error("Outpatient clinic source place");
+  checkSource(m.placeId, m.sourceGeometryWgs84);
+  const assets = Object.fromEntries(
+    ["2.5d", "3d"].map((mode) => [
+      mode,
+      { ...m.assets[mode], url: `./${m.assets[mode].file}` },
+    ]),
+  );
+  await add("outpatient-clinic", m.name, m.placeId, root, m, assets, [
+    m.placeId,
+  ]);
+}
+{
+  const root = "docs/model-previews/logistics-building-v1",
+    m = await read(`${root}/manifest.json`);
+  if (m.placeId !== "osm-way-313039029" || m.name !== "后勤楼")
+    throw new Error("Logistics building source place");
+  checkSource(m.placeId, m.sourceGeometryWgs84);
+  const assets = Object.fromEntries(
+    ["2.5d", "3d"].map((mode) => [
+      mode,
+      { ...m.assets[mode], url: `./${m.assets[mode].file}` },
+    ]),
+  );
+  await add("logistics-building", m.name, m.placeId, root, m, assets, [
+    m.placeId,
+  ]);
+}
+// These two visual links were already part of the approved A-D draft. Components omit them.
+globalThis.FileReader = class {
+  readAsArrayBuffer(blob) {
+    blob
+      .arrayBuffer()
+      .then((result) => {
+        this.result = result;
+        this.onloadend?.();
+      })
+      .catch((error) => this.onerror?.(error));
+  }
+};
+const td = await read(`${teachingRoot}/design.json`),
+  linkAssets = {};
+for (const mode of ["2.5d", "3d"]) {
+  const scene = new Scene(),
+    buckets = new Map(),
+    materials = {
+      ivory: new MeshStandardMaterial({
+        color: mode === "3d" ? "#e4e5de" : "#dedbd3",
+        roughness: 0.9,
+      }),
+      metal: new MeshStandardMaterial({ color: "#a0aeaf", roughness: 0.9 }),
+      roof: new MeshStandardMaterial({
+        color: mode === "3d" ? "#737b78" : "#efede6",
+        roughness: 0.9,
+      }),
+    };
+  for (const [k, v] of Object.entries(materials)) v.name = k;
+  const box = (mat, size, position) => {
+    if (!buckets.has(mat)) buckets.set(mat, []);
+    buckets
+      .get(mat)
+      .push(new Matrix4().makeScale(...size).setPosition(...position));
+  };
+  for (const c of td.displayConnectors) {
+    const [x, z, w, d] = c.rectMeters;
+    for (const y of c.floorDatumsMeters) {
+      box("ivory", [w, 0.2, d], [x, y, z]);
+      if (mode === "3d")
+        for (const dx of [-w / 2, w / 2])
+          box("metal", [0.06, 0.95, d], [x + dx, y + 0.6, z]);
+    }
+    box("roof", [w + 0.15, 0.16, d], [x, 18.2, z]);
+  }
+  let triangles = 0;
+  for (const [mat, matrices] of buckets) {
+    const mesh = new InstancedMesh(
+      new BoxGeometry(1, 1, 1),
+      materials[mat],
+      matrices.length,
+    );
+    matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
+    mesh.computeBoundingBox();
+    scene.add(mesh);
+    triangles += 12 * matrices.length;
+  }
+  scene.updateMatrixWorld(true);
+  const binary = Buffer.from(
+      await new GLTFExporter().parseAsync(scene, {
+        binary: true,
+        copyright:
+          "CampusOS A-D visual connector geometry, reproduced from the owner-reviewed A-D design parameters. Not GIS or navigation paths.",
+      }),
+    ),
+    file = `teaching-links-${mode}-${sha(binary).slice(0, 12)}.glb`;
+  await writeFile(`${out}/${file}`, binary);
+  let min = [Infinity, Infinity, Infinity],
+    max = [-Infinity, -Infinity, -Infinity];
+  scene.traverse((n) => {
+    if (!n.isInstancedMesh) return;
+    for (let i = 0; i < n.count; i++) {
+      const m = new Matrix4();
+      n.getMatrixAt(i, m);
+      for (const x of [-0.5, 0.5])
+        for (const y of [-0.5, 0.5])
+          for (const z of [-0.5, 0.5]) {
+            const p = new Vector3(x, y, z).applyMatrix4(m).toArray();
+            min = min.map((v, j) => Math.min(v, p[j]));
+            max = max.map((v, j) => Math.max(v, p[j]));
+          }
+    }
+  });
+  linkAssets[mode] = {
+    url: `/models/campus/${file}`,
+    sha256: sha(binary),
+    bytes: binary.length,
+    triangles,
+    drawCalls: buckets.size,
+    bounds: { min, max },
+  };
+}
+entries.push({
+  key: "teaching-links",
+  name: "教学楼连接段",
+  placeId: null,
+  memberPlaceIds: [],
+  footprintSourceIds: [],
+  origin: teaching.origin,
+  pickable: false,
+  heightAccuracy: "existing_visual_connector_parameters",
+  assets: linkAssets,
+});
+const courtyardData =
+    JSON.stringify({
+      type: "FeatureCollection",
+      features: [...courts.values()],
+    }) + "\n",
+  courtyardName = `courtyards-${sha(courtyardData).slice(0, 12)}.geojson`;
+await writeFile(`${out}/${courtyardName}`, courtyardData);
+const catalog = {
+  version: "campus-building-models-2026-11-13.6",
+  mapVersion: campus.mapVersion,
+  approvedForMap: true,
+  ownerApproval:
+    "2026-11-01：将已完成的2.5D/3D模型放入网页；2026-11-12：新增友苑模型并统一其2.5D纯白模；新增师苑1-4栋、学生活动中心与学术交流中心2.5D/3D模型；2026-11-13：新增文采园（一饭）与博雅园（二饭）2.5D/3D模型，二饭4层由负责人确认；新增风采园（三饭）2.5D/3D模型，三饭3层由负责人确认；新增门诊部2.5D/3D模型，门诊部3层由负责人确认；新增后勤楼6/2/3层组合2.5D/3D模型，层数由负责人确认",
+  ownerRenderingCorrection:
+    "2026-11-02：3D不随距离/中心位置退回白模，平移保留模型；统一南苑7栋与其他宿舍的2.5D光照。2026-11-12：友苑2.5D为纯白体块，原3D资产保持不变；师苑1-4栋为独立可选模型，六层为照片估算；学生活动中心按朝北卫星校正主厅/红塔方位并保留中部显示空隙；学术交流中心按行政/院系办公楼风格表现坡屋顶与围合庭院，4层为视觉估算",
+  referenceOrigin: [113.392, 23.066],
+  legacySouth7Preserved: true,
+  renderingPolicy: "mode-faithful-resident-models",
+  south7VolumeRenderer: "shared",
+  displayBuildingCount: 40,
+  newBuildingCount: 39,
+  visualConnectorCount: 1,
+  courtyardsUrl: `/models/campus/${courtyardName}`,
+  entries,
+};
+await writeFile(
+  "src/features/campus-map/data/building-model-catalog.json",
+  await format(JSON.stringify(catalog), { parser: "json" }),
+);
+await writeFile(
+  `${out}/SOURCE.md`,
+  "# CampusOS building models\n\nOwner authorized integration on 2026-11-01 and corrected visibility/rendering on 2026-11-02. Youyuan, Shiyuan 1–4, the Student Activity Center and the Academic Exchange Center GLBs were added on 2026-11-12/13. Youyuan 2.5D is the same plain white mass style as the North/South dormitories; its existing 3D GLB SHA256 is preserved. Shiyuan 1–4 are independent entries with exact source outlines; six stories/18 metres and facade details are visual estimates. The Student Activity Center remains one GIS entity; its white 2.5D volume and north-up corrected blue hall/red tower plus display-only central opening are visual estimates. The Academic Exchange Center keeps its source relation outer ring and two courtyard rings; grey hip roofs, four levels and facade details follow the administration/faculty visual reference and remain estimates. The Wencai Garden (First Cafeteria) model was added on 2026-11-13: a plain white 2.5D footprint volume and a southwest-facing 3D colonnade with orange upper storey, stairs, two-level display bridge and schematic solar roof. Three levels and all metric heights are photo estimates; no new routes or entrances are asserted. Boya Garden (Second Cafeteria) was added on 2026-11-13 with owner-confirmed four levels, a north-pointing triangular mass, the southern orange screen parallel to Shiyuan, a stepped south annex, exposed white stairs and roof frames. All metric heights and detailed roof/facade subdivisions are visual estimates. Its 2.5D asset is a plain white source volume. Fengcai Garden (Third Cafeteria) was added on 2026-11-13 with owner-confirmed three levels, a plain white 2.5D source volume and an east-facing 3D glazed entrance, white portico columns, silver stair tower at its south end, western curved roof rim and roof service strip. All metric heights and roof/facade subdivisions remain visual estimates. The Outpatient Clinic was added on 2026-11-13 with owner-confirmed three levels, a plain white 2.5D source volume and a folded white front facade, red rear/return walls, horizontal metal screen and rooftop plant box in 3D. All metric heights and facade/roof dimensions remain visual estimates; no clinical service information or navigation entrance is inferred. The Logistics Building complex was added on 2026-11-13 as one source place: a six-storey southern bar, two-storey western corner/connector and three-storey opposite northern bar. Source-vertex display cuts preserve the total concave footprint and its east-open courtyard; these are not new GIS building boundaries. 2.5D is stepped plain white massing and 3D adds pale facades, blue-grey windows, red low wing and open rooftop frames. Levels are owner-confirmed; metric heights remain visual estimates. No reference photographs, image textures, supplier meshes or external buffer resources are published. Footprints © OpenStreetMap contributors, ODbL-1.0. Source/approval/hash/origins are recorded in src/features/campus-map/data/building-model-catalog.json and docs/model-previews.\n\nMetric heights and photo-informed courtyard/facade details remain visual approximations, not surveyed GIS or indoor/navigation facts. Original campus map and walking network are unchanged. South-7 keeps its approved public V2 3D file; its unchanged 21-metre footprint/courtyard uses the shared 2.5D material/light path with its original native volume as a failure fallback. Completed 3D models remain detailed across zoom and pan. A-D uses V2 with the corrected B clock tower. Shared-origin components are positioned in their GLBs.\n",
+);
+console.log(
+  JSON.stringify(
+    {
+      buildingCount: catalog.displayBuildingCount,
+      newEntries: entries.length,
+      files: entries.length * 2,
+      courtyards: courts.size,
+    },
+    null,
+    2,
+  ),
+);

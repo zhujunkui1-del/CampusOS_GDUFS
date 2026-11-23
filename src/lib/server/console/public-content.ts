@@ -1,0 +1,375 @@
+import { z } from "zod";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { primaryDatabase, type SqlDatabase } from "../assistant/database";
+import { withApi } from "../http";
+import { ApiError } from "../errors";
+import { hasCampusAccess } from "../access/campus";
+import {
+  articleTitleKey,
+  articleTitleSql,
+} from "@/lib/retrieval/article-title";
+import { ConsoleIdSchema } from "@/domain/console/contracts";
+import { campusHotspot } from "@/domain/console/hotspots";
+import {
+  KnowledgeCategorySchema,
+  RadarCategorySchema,
+} from "@/domain/console/taxonomy";
+
+const QuerySchema = z
+  .object({
+    id: ConsoleIdSchema.optional(),
+    version: z.coerce.number().int().positive().optional(),
+    limit: z.coerce.number().int().min(1).max(20).default(10),
+    offset: z.coerce.number().int().min(0).max(200).default(0),
+    page: z.coerce.number().int().min(1).max(10000).optional(),
+    cursor: z.string().max(500).optional(),
+    grouped: z.literal("1").optional(),
+    surface: z.enum(["radar", "knowledge"]).optional(),
+    q: z.string().trim().max(100).optional(),
+    source: z.string().trim().max(100).optional(),
+    category: z.string().max(50).optional(),
+  })
+  .strict();
+type PublicResult = {
+  items: Record<string, unknown>[];
+  groups?: Record<string, Record<string, unknown>[]>;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  counts: Record<string, number>;
+  total: number;
+};
+const groupedResultCache = new WeakMap<
+  object,
+  Map<string, { expiresAt: number; result: PublicResult }>
+>();
+export function searchTerm(value: string) {
+  // D1's LIKE rejects patterns above 50 bytes, and Chinese search terms exceed
+  // that at fewer than 20 characters. Use instr() for a plain substring match
+  // and cap the term only to keep the bound parameter reasonable.
+  return value.slice(0, 300);
+}
+
+export async function readPublicContent(
+  db: SqlDatabase,
+  raw: unknown,
+  cacheScope: object = db,
+  campusAccess = false,
+) {
+  const q = QuerySchema.parse(raw);
+  const hotspotSelected =
+    q.surface === "radar" && q.category === campusHotspot.code;
+  if (q.version && !q.id)
+    throw new ApiError("INVALID_ARGUMENT", "请指定内容记录。");
+  if (q.page && (!q.surface || !q.category || q.id || q.cursor || q.offset))
+    throw new ApiError(
+      "INVALID_ARGUMENT",
+      "跳页需要指定栏目及分类，且不能混用分页参数。",
+    );
+  if (
+    q.grouped &&
+    (!q.surface || q.id || q.category || q.cursor || q.offset || q.page)
+  )
+    throw new ApiError("INVALID_ARGUMENT", "分组列表参数无效。");
+  let cacheKey: string | null = null;
+  let cache:
+    Map<string, { expiresAt: number; result: PublicResult }> | undefined;
+  if (q.grouped && !q.q && !q.source) {
+    const revision = await db
+      .prepare(
+        "SELECT public_visibility_revision AS revision FROM console_engine_settings WHERE id='console-v2-settings'",
+      )
+      .first<{ revision: number }>();
+    const sourceRevision = await db
+      .prepare(
+        "SELECT COALESCE(MAX(version),0) AS revision FROM knowledge_sources",
+      )
+      .first<{ revision: number }>();
+    cacheKey =
+      q.surface +
+      ":" +
+      q.limit +
+      ":" +
+      (revision?.revision || 0) +
+      ":" +
+      (sourceRevision?.revision || 0) +
+      ":" +
+      (campusAccess ? "campus" : "public");
+    cache = groupedResultCache.get(cacheScope);
+    if (!cache) {
+      cache = new Map();
+      groupedResultCache.set(cacheScope, cache);
+    }
+    const hit = cache.get(cacheKey);
+    if (hit && hit.expiresAt > Date.now()) {
+      const cachedItems = new Map(
+        [
+          ...hit.result.items,
+          ...(hit.result.groups?.[campusHotspot.code] ?? []),
+        ].map((item) => [String(item.id), item.version]),
+      );
+      const ids = [...cachedItems.keys()];
+      const fresh = new Map<string, number>();
+      for (let i = 0; i < ids.length; i += 50) {
+        const batch = ids.slice(i, i + 50);
+        const rows = await db
+          .prepare(
+            `WITH ids(id) AS (VALUES ${batch.map(() => "(?)").join(",")}) SELECT id,(SELECT version FROM console_public_documents p WHERE p.id=ids.id) AS version FROM ids`,
+          )
+          .bind(...batch)
+          .all<{ id: string; version: number }>();
+        for (const r of rows.results) fresh.set(r.id, r.version);
+      }
+      if (ids.every((id) => fresh.get(id) === cachedItems.get(id)))
+        return hit.result;
+      cache.delete(cacheKey);
+    }
+  }
+  const where = ["1=1"];
+  if (!campusAccess) where.push("COALESCE(s.campus_only,0)=0");
+  const params: unknown[] = [];
+  // Normalize titles before entering the deep publication/classification views.
+  // Keep their eligibility expressions independent of the normalization stack.
+  let titleIds: string | undefined;
+  if (q.q) {
+    const matches = await db
+      .prepare(
+        `SELECT d.id FROM knowledge_documents d WHERE d.owner_user_id IS NULL AND d.data_domain<>'user_private' AND instr(${articleTitleSql("d.title")},?)>0`,
+      )
+      .bind(articleTitleKey(searchTerm(q.q)))
+      .all<{ id: string }>();
+    titleIds = JSON.stringify(matches.results.map((row) => row.id));
+  }
+  if (q.id) {
+    where.push("d.id=?");
+    params.push(q.id);
+  }
+  if (q.version) {
+    where.push("d.version=?");
+    params.push(q.version);
+  }
+  const surfaceFilter = q.surface === "radar"
+    ? "a.primary_destination IN('radar','unknown')"
+    : q.surface === "knowledge" ? "a.primary_destination='knowledge'" : "1=1";
+  const category = q.category
+    ? (() => {
+        if (!q.surface)
+          throw new ApiError("INVALID_ARGUMENT", "请指定内容页面。");
+        return q.surface === "radar" &&
+          (q.category === "unclassified" || hotspotSelected)
+          ? q.category
+          : (q.surface === "radar"
+              ? RadarCategorySchema
+              : KnowledgeCategorySchema
+            ).parse(q.category);
+      })()
+    : null;
+  if (q.q) {
+    where.push("d.id IN(SELECT value FROM json_each(?))");
+    params.push(titleIds);
+  }
+  if (q.source) {
+    where.push("instr(s.display_name, ?) > 0");
+    params.push(searchTerm(q.source));
+  }
+  const related =
+    "JOIN knowledge_sources s ON s.id=d.source_id JOIN console_article_classifications a ON a.document_id=d.id";
+  const joined = `FROM knowledge_documents d ${related}`;
+  const hotspotJoin = `FROM campus_article_hotspots h CROSS JOIN knowledge_documents d ON d.id=h.document_id ${related}`;
+  const publicGate = "EXISTS(SELECT 1 FROM console_public_documents p WHERE p.id=d.id)";
+  const projection =
+    "d.id,d.version,d.title,d.url,d.published_at,d.updated_at,d.content_type,d.campus_scope,a.knowledge_category,a.radar_category,a.primary_destination,a.has_registration,a.classification_origin,d.body_format,d.rights_scope,s.id AS source_id,s.display_name,s.channel_type,s.official_status";
+  const hotspotBase =
+    q.surface === "radar" && !q.id
+      ? `${hotspotJoin} WHERE ${where.join(" AND ")} AND ${publicGate}`
+      : null;
+  const hotspotRows =
+    hotspotBase && q.grouped
+      ? (await db
+          .prepare(`SELECT ${projection},count(*) OVER () AS category_count ${hotspotBase} ORDER BY d.published_at DESC,d.id LIMIT ?`)
+          .bind(...params, q.limit)
+          .all<Record<string, string | number | null>>()).results
+      : [];
+  const hotspotCount =
+    hotspotBase && !q.grouped
+      ? (await db
+          .prepare(`SELECT count(*) AS n ${hotspotBase}`)
+          .bind(...params)
+          .first<{ n: number }>())?.n ?? 0
+      : Number(hotspotRows[0]?.category_count ?? 0);
+  const base = `${joined} WHERE ${where.join(" AND ")} AND ${surfaceFilter} AND ${publicGate}`;
+  const categoryColumn =
+    q.surface === "radar"
+      ? "COALESCE(a.radar_category,'unclassified')"
+      : "a.knowledge_category";
+  const facets =
+    q.surface && !q.id && !q.grouped
+      ? await db
+          .prepare(
+            q.source
+              ? `WITH matched_sources(id) AS MATERIALIZED (
+                   SELECT id FROM knowledge_sources WHERE instr(display_name, ?) > 0
+                 )
+                 SELECT ${categoryColumn} AS category,count(*) AS n
+                 FROM knowledge_documents d JOIN console_article_classifications a ON a.document_id=d.id
+                 JOIN matched_sources m ON m.id=d.source_id
+                 JOIN knowledge_sources s ON s.id=d.source_id
+                 WHERE ${q.surface === "radar" ? "a.primary_destination IN('radar','unknown')" : "a.primary_destination='knowledge'"} AND ${campusAccess ? "1=1" : "COALESCE(s.campus_only,0)=0"} AND EXISTS(SELECT 1 FROM console_public_documents p WHERE p.id=d.id)
+                   ${q.q ? "AND d.id IN(SELECT value FROM json_each(?))" : ""}
+                 GROUP BY ${categoryColumn}`
+              : `SELECT ${categoryColumn} AS category,count(*) AS n ${base} GROUP BY ${categoryColumn}`,
+          )
+          .bind(
+            ...(q.source
+              ? [searchTerm(q.source), ...(q.q ? [titleIds] : [])]
+              : params),
+          )
+          .all<{ category: string; n: number }>()
+      : { results: [] };
+  const counts: Record<string, number> = Object.fromEntries(
+    facets.results.map((r) => [r.category, r.n]),
+  );
+  // Direct jumps use the actual visible category size; normal next/previous reads keep cursors.
+  const selectedTotal = hotspotSelected ? hotspotCount : counts[category ?? ""] || 0;
+  const offset = q.page
+    ? (Math.min(q.page, Math.max(1, Math.ceil(selectedTotal / q.limit))) - 1) *
+      q.limit
+    : q.offset;
+  if (!hotspotSelected) where.push(surfaceFilter);
+  if (category && !hotspotSelected) {
+    where.push(categoryColumn + "=?");
+    params.push(category);
+  }
+  if (q.cursor) {
+    if (q.id || q.offset)
+      throw new ApiError("INVALID_ARGUMENT", "分页参数冲突。");
+    let cursor: [string | null, string];
+    try {
+      cursor = z
+        .tuple([z.string().max(100).nullable(), ConsoleIdSchema])
+        .parse(JSON.parse(atob(q.cursor)));
+    } catch {
+      throw new ApiError("INVALID_ARGUMENT", "分页位置无效。");
+    }
+    if (cursor[0] === null) {
+      where.push("d.published_at IS NULL AND d.id>?");
+      params.push(cursor[1]);
+    } else {
+      where.push(
+        "(d.published_at<? OR (d.published_at=? AND d.id>?) OR d.published_at IS NULL)",
+      );
+      params.push(cursor[0], cursor[0], cursor[1]);
+    }
+  }
+  const from = `${hotspotSelected ? hotspotJoin : joined} WHERE ${where.join(" AND ")} AND ${publicGate}`;
+  const candidateBase = `${joined} WHERE ${where.join(" AND ")}`;
+  const rows = q.grouped
+    ? await db
+        .prepare(
+          `WITH candidates AS MATERIALIZED(SELECT ${projection},${categoryColumn} AS feed_category ${candidateBase}),visible AS MATERIALIZED(SELECT * FROM candidates c WHERE EXISTS(SELECT 1 FROM console_public_documents p WHERE p.id=c.id AND p.version=c.version)) SELECT * FROM (SELECT *,count(*) OVER(PARTITION BY feed_category) AS category_count,ROW_NUMBER() OVER(PARTITION BY feed_category ORDER BY published_at DESC,id) AS group_position FROM visible) WHERE group_position<=? ORDER BY feed_category,published_at DESC,id`,
+        )
+        .bind(...params, q.limit)
+        .all<Record<string, string | number | null>>()
+    : await db
+        .prepare(
+          `SELECT ${projection} ${from} ORDER BY d.published_at DESC,d.id LIMIT ? OFFSET ?`,
+        )
+        .bind(...params, q.id ? 1 : q.limit + 1, q.id ? 0 : offset)
+        .all<Record<string, string | number | null>>();
+  if (q.grouped)
+    for (const row of rows.results)
+      counts[String(row.feed_category)] = Number(row.category_count);
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  if (hotspotCount > 0) counts[campusHotspot.code] = hotspotCount;
+  const selectedRows = q.id
+    ? rows.results.slice(0, 1)
+    : q.grouped
+      ? rows.results
+      : rows.results.slice(0, q.limit);
+  const toItem = (r: Record<string, string | number | null>) => ({
+    id: r.id,
+    version: r.version,
+    title: r.title,
+    url: r.url,
+    publishedAt: r.published_at,
+    updatedAt: r.updated_at,
+    contentType: r.content_type,
+    campusScope: r.campus_scope,
+    knowledgeCategory: r.knowledge_category,
+    radarCategory: r.radar_category,
+    primaryDestination: r.primary_destination,
+    hasRegistration: r.has_registration === 1,
+    classificationOrigin: r.classification_origin,
+    readable:
+      r.body_format === "reading_html" &&
+      r.rights_scope === "licensed_full_text",
+    source: {
+      id: r.source_id,
+      name: r.display_name,
+      type: r.channel_type,
+      official: r.official_status === "verified_official",
+    },
+  });
+  const items = selectedRows.map(toItem);
+  const groups = q.grouped
+    ? items.reduce<Record<string, typeof items>>((result, item) => {
+        const code =
+          item.radarCategory || item.knowledgeCategory || "unclassified";
+        if (code) (result[code] ||= []).push(item);
+        return result;
+      }, {})
+    : undefined;
+  if (groups && hotspotBase) groups[campusHotspot.code] = hotspotRows.map(toItem);
+  if (q.id && !items.length)
+    throw new ApiError("NOT_FOUND", "此内容尚未公开或已失效。");
+  const result = {
+    items,
+    groups,
+    limit: q.id ? 1 : q.limit,
+    offset: q.id ? 0 : offset,
+    hasMore: q.grouped
+      ? Object.values(counts).some((count) => count > q.limit)
+      : !q.id && rows.results.length > q.limit,
+    nextCursor:
+      !q.grouped && !q.id && rows.results.length > q.limit && items.length
+        ? btoa(JSON.stringify([items.at(-1)!.publishedAt, items.at(-1)!.id]))
+        : null,
+    counts,
+    total,
+  };
+  if (cacheKey && cache) {
+    if (cache.size > 4) cache.clear();
+    cache.set(cacheKey, { expiresAt: Date.now() + 30_000, result });
+  }
+  return result;
+}
+export const publicContent = withApi(async (request) => {
+  let env: Record<string, unknown>;
+  try {
+    env = getCloudflareContext().env as unknown as Record<string, unknown>;
+  } catch {
+    throw new ApiError("SERVICE_UNAVAILABLE", "内容服务暂不可用。");
+  }
+  if (!env.DB) throw new ApiError("SERVICE_UNAVAILABLE", "内容服务暂不可用。");
+  const limiter = env.MAP_RATE_LIMITER as
+    { limit(args: { key: string }): Promise<{ success: boolean }> } | undefined;
+  if (
+    limiter &&
+    !(
+      await limiter.limit({
+        key:
+          "public-content:" +
+          (request.headers.get("CF-Connecting-IP") || "local"),
+      })
+    ).success
+  )
+    throw new ApiError("RATE_LIMITED", "请求较频繁，请稍后重试。");
+  const db = primaryDatabase(env.DB as SqlDatabase);
+  return readPublicContent(
+    db,
+    Object.fromEntries(new URL(request.url).searchParams),
+    env.DB as object,
+    await hasCampusAccess(db, request),
+  );
+});

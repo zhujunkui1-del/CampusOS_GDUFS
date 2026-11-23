@@ -1,0 +1,44 @@
+import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
+
+const securityHeaders = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "X-Frame-Options", value: "DENY" },
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=(self)",
+  },
+];
+
+const nextConfig: NextConfig = {
+  agentRules: false,
+  devIndicators: false,
+  poweredByHeader: false,
+  images: { unoptimized: true },
+  async rewrites() {
+    return [
+      { source: "/_AMapService/:path*", destination: "/api/amap/:path*" },
+    ];
+  },
+  async headers() {
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      {
+        source: "/maps/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+    ];
+  },
+};
+
+export default async function configure(phase: string) {
+  if (phase === PHASE_DEVELOPMENT_SERVER) await initOpenNextCloudflareForDev();
+  return nextConfig;
+}

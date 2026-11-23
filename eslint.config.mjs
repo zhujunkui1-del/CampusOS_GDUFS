@@ -1,0 +1,25 @@
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
+
+export default defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  globalIgnores([
+    ".next/**",
+    ".open-next/**",
+    ".wrangler/**",
+    "**/.wrangler/**",
+    "next-env.d.ts",
+    "cloudflare-env.d.ts",
+    "playwright-report/**",
+    "test-results/**",
+    "services/cloud-search/build/**",
+    ".tmp/**",
+    ".tmp-open-next-build/**",
+    "output/**",
+    "backups/**",
+    "scripts/kb_build/**",
+    "public/vendor/**",
+  ]),
+]);
